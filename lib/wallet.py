@@ -526,7 +526,7 @@ class Wallet:
                 if line['height'] == 0:
                     line['timestamp'] = 1e12
                 else:
-                    if self.verifier: self.verifier.add(tx_hash)
+                    if self.verifier: self.verifier.add(tx_hash, tx)
                     
         self.update_tx_labels()
 

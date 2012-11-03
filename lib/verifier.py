@@ -32,10 +32,14 @@ class WalletVerifier(threading.Thread):
         self.daemon = True
         self.config = config
         self.interface = interface
-        self.transactions    = []                                 # monitored transactions
+        self.transactions    = {}                                 # monitored transactions
         self.interface.register_channel('verifier')
-        self.verified_tx     = config.get('verified_tx',{})
+
+        self.verified_tx     = config.get('verified_tx',{})       # height of verified tx
+
         self.merkle_roots    = config.get('merkle_roots',{})      # hashed by me
+        self.raw_tx          = config.get('raw_tx',{})            # raw transactions
+        
         self.targets         = config.get('targets',{})           # compute targets
         self.lock = threading.Lock()
         self.pending_headers = [] # headers that have not been verified
@@ -51,13 +55,14 @@ class WalletVerifier(threading.Thread):
             else:
                 return 0
 
-    def add(self, tx):
+    def add(self, tx_hash, tx):
         """ add a transaction to the list of monitored transactions. """
         with self.lock:
-            if tx not in self.transactions:
-                self.transactions.append(tx)
+            if tx_hash not in self.transactions:
+                self.transactions[tx_hash] = tx
 
     def run(self):
+        requested_tx = []
         requested_merkle = []
         requested_chunks = []
         requested_headers = []
@@ -82,14 +87,13 @@ class WalletVerifier(threading.Thread):
                     all_chunks = True
                     print_error("downloaded all chunks")
 
-            # request missing tx merkle
-            for tx in self.transactions:
-                if tx not in self.verified_tx:
-                    if tx not in requested_merkle:
-                        requested_merkle.append(tx)
-                        self.request_merkle(tx)
-                        #break
-
+            # request missing tx
+            if all_chunks:
+                for tx in self.transactions:
+                    if tx not in self.verified_tx:
+                        if self.raw_tx.get(tx) is None and tx not in requested_tx:
+                            self.interface.send([ ('blockchain.transaction.get',[tx]) ], 'verifier')
+                            requested_tx.append(tx)
 
             # process pending headers
             if self.pending_headers and all_chunks:
@@ -120,7 +124,15 @@ class WalletVerifier(threading.Thread):
             params = r['params']
             result = r['result']
 
-            if method == 'blockchain.transaction.get_merkle':
+            if method == 'blockchain.transaction.get':
+                tx_hash = params[0]
+                self.verify_tx(tx_hash, result)
+                requested_tx.remove(tx_hash)
+                if self.merkle_roots.get(tx_hash) is None and tx_hash not in requested_merkle:
+                    self.interface.send([ ('blockchain.transaction.get_merkle',[tx_hash]) ], 'verifier')
+                    requested_merkle.append(tx_hash)
+
+            elif method == 'blockchain.transaction.get_merkle':
                 tx_hash = params[0]
                 self.verify_merkle(tx_hash, result)
                 requested_merkle.remove(tx_hash)
@@ -141,25 +153,31 @@ class WalletVerifier(threading.Thread):
                 self.pending_headers.sort(key=lambda x: x.get('block_height'))
                 # print "pending headers", map(lambda x: x.get('block_height'), self.pending_headers)
 
-
-
             self.interface.trigger_callback('updated')
 
 
-    def request_merkle(self, tx_hash):
-        self.interface.send([ ('blockchain.transaction.get_merkle',[tx_hash]) ], 'verifier')
-
+    def verify_tx(self, tx_hash, tx):
+        import deserialize, BCDataStream
+        # check the hash
+        assert tx_hash == hash_encode(Hash(tx.decode('hex')))
+        # also check that the result is consistent with known data
+        print self.transactions[tx_hash]
+        vds = BCDataStream.BCDataStream()
+        vds.write(tx.decode('hex'))
+        d = deserialize.parse_Transaction(vds)
+        print deserialize.deserialize_Transaction(d)
+    
 
     def verify_merkle(self, tx_hash, result):
         tx_height = result.get('block_height')
         self.merkle_roots[tx_hash] = self.hash_merkle_root(result['merkle'], tx_hash, result.get('pos'))
         header = self.read_header(tx_height)
-        if header:
-            assert header.get('merkle_root') == self.merkle_roots[tx_hash]
-            self.verified_tx[tx_hash] = tx_height
-            print_error("verified %s"%tx_hash)
-            self.config.set_key('verified_tx', self.verified_tx, True)
-
+        if not header: return
+        assert header.get('merkle_root') == self.merkle_roots[tx_hash]
+        # we passed all the tests
+        self.verified_tx[tx_hash] = tx_height
+        print_error("verified %s"%tx_hash)
+        self.config.set_key('verified_tx', self.verified_tx, True)
 
     def verify_chunk(self, index, hexdata):
         data = hexdata.decode('hex')
