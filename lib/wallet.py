@@ -64,7 +64,6 @@ class Wallet:
         self.addresses             = config.get('addresses', [])          # receiving addresses visible for user
         self.change_addresses      = config.get('change_addresses', [])   # addresses used as change
         self.seed                  = config.get('seed', '')               # encrypted
-        self.history               = config.get('history',{})
         self.labels                = config.get('labels',{})              # labels for addresses and transactions
         self.aliases               = config.get('aliases', {})            # aliases for addresses
         self.authorities           = config.get('authorities', {})        # trusted addresses
@@ -73,10 +72,12 @@ class Wallet:
         self.receipts              = config.get('receipts',{})            # signed URIs
         self.addressbook           = config.get('contacts', [])           # outgoing addresses, for payments
         self.imported_keys         = config.get('imported_keys',{})
+        self.history               = config.get('history',{})             # address -> list(txid, height, timestamp)
+        self.transactions          = config.get('transactions',{})        # txid -> deserialised
 
         # not saved
+        self.prevout_values = {}
         self.receipt = None          # next receipt
-        self.tx_history = {}
         self.banner = ''
 
         # spv
@@ -91,9 +92,10 @@ class Wallet:
         self.lock = threading.Lock()
         self.tx_event = threading.Event()
 
-        self.update_tx_history()
         if self.seed_version != SEED_VERSION:
             raise ValueError("This wallet seed is deprecated. Please run upgrade.py for a diagnostic.")
+
+        self.update_prevout_values()
 
     def init_up_to_date(self):
         self.up_to_date_event.clear()
@@ -348,8 +350,8 @@ class Wallet:
         return (len(self.change_addresses) > 1 ) or ( len(self.addresses) > self.gap_limit )
 
     def fill_addressbook(self):
-        for tx in self.tx_history.values():
-            if tx['value']<0:
+        for tx_hash, tx in self.transactions.items():
+            if self.get_tx_value(tx_hash)<0:
                 for i in tx['outputs']:
                     if not self.is_mine(i) and i not in self.addressbook:
                         self.addressbook.append(i)
@@ -367,9 +369,9 @@ class Wallet:
         assert self.is_mine(addr)
         h = self.history.get(addr,[])
         c = u = 0
-        for item in h:
-            v = item['value']
-            if item['height']:
+        for tx_hash, tx_height, timestamp in h:
+            v = self.get_tx_value(tx_hash, [addr])
+            if tx_height:
                 c += v
             else:
                 u += v
@@ -475,6 +477,7 @@ class Wallet:
             return s
 
     def get_status(self, address):
+        return None
         with self.lock:
             h = self.history.get(address)
         if not h:
@@ -487,22 +490,76 @@ class Wallet:
         return status
 
 
-    def receive_history_callback(self, addr, data): 
+    def receive_tx_callback(self, tx_hash, d):
         #print "updating history for", addr
         with self.lock:
-            self.history[addr] = data
-            self.update_tx_history()
+            self.transactions[tx_hash] = d
+            if self.verifier: self.verifier.add(tx_hash)
+            i = 0 
+            for item in d.get('outputs'):
+                value = item.get('value')
+                x = tx_hash+ ':%d'%i 
+                self.prevout_values[x] = value 
+                i += 1
+
+            #self.update_tx_labels()
             self.save()
+
+
+    def receive_history_callback(self, addr, hist):
+        #print "updating history for", addr
+        with self.lock:
+            self.history[addr] = hist
+            self.save()
+
+
+    def get_tx_value(self, tx_hash, addresses = None):
+        if addresses is None: addresses = self.all_addresses()
+        # return the balance for that tx
+        v = 0
+        d = self.transactions.get(tx_hash)
+
+        for item in d.get('inputs'):
+            addr = item.get('address')
+            if addr in addresses:
+                key = hash_encode(item['prevout_hash']) + ':%d'%item['prevout_n']
+                value = self.prevout_values.get( key ) 
+                if value: 
+                    v -= value
+                else: 
+                    raise BaseException('no value for ', key)
+
+        for item in d.get('outputs'):
+            addr = item.get('address')
+            value = item.get('value')
+            if addr in addresses: 
+                v += value 
+
+        return v
+
+
+    def update_prevout_values(self):
+        with self.lock:
+            for tx_hash, d in self.transactions.items():
+                i = 0 
+                for item in d.get('outputs'):
+                    value = item.get('value')
+                    x = tx_hash+ ':%d'%i 
+                    self.prevout_values[x] = value 
+                    i += 1
+
+            #print self.prevout_values
 
     def get_tx_history(self):
         with self.lock:
-            lines = self.tx_history.values()
+            lines = self.transactions.values()
+
         lines = sorted(lines, key=operator.itemgetter("timestamp"))
         return lines
 
     def get_transactions_at_height(self, height):
         with self.lock:
-            values = self.tx_history.values()[:]
+            values = self.transactions.values()[:]
 
         out = []
         for tx in values:
@@ -510,28 +567,9 @@ class Wallet:
                 out.append(tx['tx_hash'])
         return out
 
-    def update_tx_history(self):
-        self.tx_history= {}
-        for addr in self.all_addresses():
-            h = self.history.get(addr)
-            if h is None: continue
-            for tx in h:
-                tx_hash = tx['tx_hash']
-                line = self.tx_history.get(tx_hash)
-                if not line:
-                    self.tx_history[tx_hash] = copy.copy(tx)
-                    line = self.tx_history.get(tx_hash)
-                else:
-                    line['value'] += tx['value']
-                if line['height'] == 0:
-                    line['timestamp'] = 1e12
-                else:
-                    if self.verifier: self.verifier.add(tx_hash, tx)
-                    
-        self.update_tx_labels()
 
     def update_tx_labels(self):
-        for tx in self.tx_history.values():
+        for tx in self.transactions.values():
             default_label = ''
             if tx['value']<0:
                 for o_addr in tx['outputs']:
@@ -811,6 +849,7 @@ class Wallet:
             'frozen_addresses': self.frozen_addresses,
             'prioritized_addresses': self.prioritized_addresses,
             'gap_limit': self.gap_limit,
+            'transactions': self.transactions,
         }
         for k, v in s.items():
             self.config.set_key(k,v)
@@ -818,7 +857,9 @@ class Wallet:
 
     def set_verifier(self, verifier):
         self.verifier = verifier
-        self.update_tx_history()
+        for tx_hash in self.transactions.keys(): 
+            self.verifier.add(tx_hash)
+
 
 
 
@@ -862,6 +903,7 @@ class WalletSynchronizer(threading.Thread):
 
 
     def run(self):
+        requested_tx = []
 
         # wait until we are connected, in case the user is not connected
         while not self.interface.is_connected:
@@ -897,8 +939,26 @@ class WalletSynchronizer(threading.Thread):
                             
             elif method == 'blockchain.address.get_history':
                 addr = params[0]
-                self.wallet.receive_history_callback(addr, result)
+                hist = []
+                # in the new protocol, we will receive a list of (tx ids, height, timestamp)
+                for tx in result: hist.append( (tx['tx_hash'], tx['height'], tx['timestamp']) )
+                # store it
+                self.wallet.receive_history_callback(addr, hist)
+                # request transactions that we don't have 
+                for tx_hash, tx_height, timestamp in hist:
+                    if self.wallet.transactions.get(tx_hash) is None and tx_hash not in requested_tx:
+                        self.interface.send([ ('blockchain.transaction.get',[tx_hash, tx_height, timestamp]) ], 'synchronizer')
+                        requested_tx.append(tx_hash)
+
+            elif method == 'blockchain.transaction.get':
+                tx_hash = params[0]
+                tx_height = params[1]
+                timestamp = params[2]
+                tx = result
+                self.receive_tx(tx_hash, tx_height, timestamp, tx)
+                requested_tx.remove(tx_hash)
                 self.was_updated = True
+
 
             elif method == 'blockchain.transaction.broadcast':
                 self.wallet.tx_result = result
@@ -915,4 +975,21 @@ class WalletSynchronizer(threading.Thread):
                 self.interface.trigger_callback('updated')
                 self.was_updated = False
 
+
+    def receive_tx(self, tx_hash, tx_height, timestamp, raw_tx):
+
+        assert tx_hash == hash_encode(Hash(raw_tx.decode('hex')))
+
+        import deserialize, BCDataStream
+
+        # deserialize
+        vds = BCDataStream.BCDataStream()
+        vds.write(raw_tx.decode('hex'))
+        d = deserialize.parse_Transaction(vds)
+        d['height'] = tx_height
+        d['tx_hash'] = tx_hash
+        d['timestamp'] = timestamp
+        d['default_label'] = tx_hash
+        print d
+        self.wallet.receive_tx_callback(tx_hash, d)
 
