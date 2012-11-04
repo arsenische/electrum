@@ -451,7 +451,8 @@ class ElectrumWindow(QMainWindow):
             balance += v 
             label = self.wallet.labels.get(tx_hash)
             is_default_label = (label == '') or (label is None)
-            if is_default_label: label = tx['default_label']
+            if is_default_label:
+                label = self.wallet.get_default_label(tx_hash)
 
             item = QTreeWidgetItem( [ '', time_str, label, format_satoshis(v,True,self.wallet.num_zeros), format_satoshis(balance,False,self.wallet.num_zeros)] )
             item.setFont(2, QFont(MONOSPACE_FONT))
@@ -847,7 +848,7 @@ class ElectrumWindow(QMainWindow):
             label = self.wallet.labels.get(address,'')
             n = 0 
             h = self.wallet.history.get(address,[])
-            for tx_hash, tx_height, timestamp in h:
+            for tx_hash, tx_height in h:
                 tx = self.wallet.transactions.get(tx_hash)
                 if tx: n += 1
 

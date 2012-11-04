@@ -1,8 +1,8 @@
-#
+# this code comes from ABE. it can probably be simplified
 #
 #
 
-from bitcoin import public_key_to_bc_address, hash_160_to_bc_address
+from bitcoin import public_key_to_bc_address, hash_160_to_bc_address, hash_encode
 #import socket
 import time
 import struct
@@ -182,7 +182,7 @@ def short_hex(bytes):
 
 def parse_TxIn(vds):
   d = {}
-  d['prevout_hash'] = vds.read_bytes(32)
+  d['prevout_hash'] = hash_encode(vds.read_bytes(32))
   d['prevout_n'] = vds.read_uint32()
   scriptSig = vds.read_bytes(vds.read_compact_size())
   d['sequence'] = vds.read_uint32()
@@ -191,12 +191,14 @@ def parse_TxIn(vds):
   return d
 
 
-def parse_TxOut(vds):
+def parse_TxOut(vds, i):
   d = {}
   d['value'] = vds.read_int64()
   scriptPubKey = vds.read_bytes(vds.read_compact_size())
   d['address'] = extract_public_key(scriptPubKey)
   #d['script'] = decode_script(scriptPubKey)
+  d['raw_output_script'] = scriptPubKey.encode('hex')
+  d['index'] = i
   return d
 
 
@@ -211,8 +213,9 @@ def parse_Transaction(vds):
   n_vout = vds.read_compact_size()
   d['outputs'] = []
   for i in xrange(n_vout):
-    d['outputs'].append(parse_TxOut(vds))
+    d['outputs'].append(parse_TxOut(vds, i))
   d['lockTime'] = vds.read_uint32()
+  print d
   return d
 
 
