@@ -1,0 +1,7 @@
+[daemon]
+port = 8080
+
+[electrum]
+master_public_key = # put master_public_key here; run "electrum eval wallet.master_public_key" to get it
+
+
