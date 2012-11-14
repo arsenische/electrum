@@ -2,7 +2,7 @@
 # This script is based on https://github.com/spesmilo/electrum/blob/master/scripts/merchant.py (authored by homasv@gitorious) thus license: GPL (v3 or later), see <http://www.gnu.org/licenses/>
 
 def handle_help():
-    print "\nElectrum address generator serves deterministic bitcoin addresses by its index.\n"
+    print "\nElectrum address generator serves up deterministic bitcoin addresses by their indices.\n"
     print "  Config file: electrum-address-generator.conf\n"
     print "  Usage: python electrum-address-generator.py <options>\n"
     print "  Options:"
