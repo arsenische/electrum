@@ -1,5 +1,19 @@
 #!/usr/bin/env python
-# This script is based on https://github.com/spesmilo/electrum/blob/master/scripts/merchant.py (authored by homasv@gitorious) thus license: GPL (v3 or later), see <http://www.gnu.org/licenses/>
+'''
+This script is based on https://github.com/spesmilo/electrum/blob/master/scripts/merchant.py (authored by homasv@gitorious) thus license: GPL (v3 or later), see <http://www.gnu.org/licenses/>
+
+Requirements:
+
+sudo apt-get install python-twisted
+sudo apt-get install python-setuptools
+sudo easy_install txJSON-RPC
+sudo apt-get install python-pip
+sudo pip install http://download.electrum.org/download/Electrum-1.6.2.tar.gz#md5=4e40d5c6c13e7e7d09b559cc6f4eb982
+
+'''
+
+
+
 
 def handle_help():
     print "\nElectrum address generator serves up deterministic bitcoin addresses by their indices.\n"
