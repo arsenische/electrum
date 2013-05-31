@@ -50,7 +50,7 @@ class Json_Rpc_Daemon():
         reactor.run()
 
 def handle_getaddress(index):
-    return wallet.get_new_address(index, 0)
+    return wallet.get_new_address(0, 0, index)
 
 if __name__ == "__main__":
     try:
@@ -59,7 +59,7 @@ if __name__ == "__main__":
       if (cmd=="-daemon"):
           rpc_server = Json_Rpc_Daemon()
       elif (cmd=="getaddress") and (len(sys.argv)==3):
-          handle_getaddress(int(sys.argv[2]))
+          print handle_getaddress(int(sys.argv[2]))
       else:
           handle_help()
     except Exception, e:
